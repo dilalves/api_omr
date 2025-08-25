@@ -111,15 +111,14 @@ def omr():
 
     # 2) configuração do grid (7 linhas x 10 colunas)
     CFG = {
-        # bloco das bolhas (percentuais). Ajuste fino com seu debug_url:
-        "Y0": 0.74,   # topo do bloco (~74% da altura)
-        "ALT": 0.20,  # altura do bloco (~20% da altura)
-        "X0": 0.64,   # início horizontal (~64% da largura)
-        "LARG": 0.30, # largura do bloco (~30% da largura)
-
-        "ROWS": 7, "COLS": 10,
-        "BUBBLE_H": 0.70, "BUBBLE_W": 0.70,  # tamanho relativo da ROI da bolha
-        "MARGIN_DELTA": 0.06                 # limiar p/ marcar baixa separação
+      "Y0": 0.8347,
+      "ALT": 0.1043,
+      "X0": 0.6989,
+      "LARG": 0.2068,
+      "ROWS": 7, "COLS": 10,
+      "BUBBLE_H": 0.75,
+      "BUBBLE_W": 0.82,
+      "MARGIN_DELTA": 0.06
     }
 
     # 3) dimensões reais do grid
@@ -179,3 +178,4 @@ def omr():
         "warped": bool(warped),
         "debug_url": debug_url
     })
+
