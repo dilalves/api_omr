@@ -109,93 +109,109 @@ def health():
 
 @app.post("/omr")
 def omr():
-    data = request.get_json(force=True) or {}
-    img_b64 = data.get("image_base64")
-    if not img_b64:
-        return jsonify({"error": "image_base64 ausente"}), 400
+    try:
+        data = request.get_json(force=True) or {}
+        img_b64 = data.get("image_base64")
+        if not img_b64:
+            return jsonify({"error": "image_base64 ausente"}), 400
 
-    # 1) decodifica -> tenta warp -> (se falhar) normaliza -> binariza
-    gray = decode_base64_to_gray(img_b64)
-    gray, warped = warp_to_template(gray)      # se não achar marcadores, segue sem warp
-    if not warped:
-        gray = normalize(gray, width=1000)     # <-- INDENTADO AQUI
+        # opcional: forçar sem warp (igual calibrador)
+        no_warp = bool(data.get("no_warp", False))
 
-    H, W = gray.shape[:2]
-    bin_img = binarize(gray)
+        # 1) decodifica -> decide base (warp ou normalize) -> binariza
+        gray = decode_base64_to_gray(img_b64)
 
-    # 2) configuração do grid (7 linhas x 10 colunas)
-    CFG = {
-      "Y0": 0.8744,
-      "ALT": 0.1173,
-      "X0": 0.7359,
-      "LARG": 0.2305,
-      "ROWS": 7,
-      "COLS": 10,
-      "BUBBLE_H": 0.75,
-      "BUBBLE_W": 0.8,
-      "MARGIN_DELTA": 0.06
-    }
-    # Se vier cfg no body, ele sobrescreve o padrão (sem redeploy)
-    user_cfg = data.get("cfg") or {}
-    CFG = {**DEFAULT_CFG, **user_cfg}
+        if no_warp:
+            warped = False
+            gray = normalize(gray, width=1000)
+        else:
+            gray, warped = warp_to_template(gray)   # tenta warp pelos 4 quadrados
+            if not warped:
+                gray = normalize(gray, width=1000)  # fallback
 
-    # 3) dimensões reais do grid
-    grid_y = int(CFG["Y0"] * H)
-    grid_h = int(CFG["ALT"] * H)
-    grid_x = int(CFG["X0"] * W)
-    grid_w = int(CFG["LARG"] * W)
-    cell_h = grid_h / CFG["ROWS"]
-    cell_w = grid_w / CFG["COLS"]
+        H, W = gray.shape[:2]
+        bin_img = binarize(gray)
 
-    def bubble_roi(r, c):
-        cy0 = int(grid_y + r * cell_h)
-        cx0 = int(grid_x + c * cell_w)
-        bh  = int(cell_h * CFG["BUBBLE_H"])
-        bw  = int(cell_w * CFG["BUBBLE_W"])
-        y   = int(cy0 + (cell_h - bh) / 2)
-        x   = int(cx0 + (cell_w - bw) / 2)
-        return y, x, bh, bw
+        # 2) configuração do grid (padrão + override recebido)
+        DEFAULT_CFG = {
+            "Y0": 0.8744,
+            "ALT": 0.1173,
+            "X0": 0.7359,
+            "LARG": 0.2305,
+            "ROWS": 7, "COLS": 10,
+            "BUBBLE_H": 0.75,
+            "BUBBLE_W": 0.80,
+            "MARGIN_DELTA": 0.06,
+        }
+        user_cfg = data.get("cfg") or {}
+        CFG = {**DEFAULT_CFG, **user_cfg}
 
-    # 4) varre as 7 linhas; cada coluna 0..9 vira score (proporção de preto)
-    digits, confs = [], []
-    debug = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)  # para desenhar em preto
+        # 3) dimensões reais do grid
+        grid_y = int(CFG["Y0"] * H)
+        grid_h = int(CFG["ALT"] * H)
+        grid_x = int(CFG["X0"] * W)
+        grid_w = int(CFG["LARG"] * W)
+        cell_h = grid_h / CFG["ROWS"]
+        cell_w = grid_w / CFG["COLS"]
 
-    for r in range(CFG["ROWS"]):
-        scores = []
-        for c in range(CFG["COLS"]):
-            y, x, h, w = bubble_roi(r, c)
-            roi = bin_img[y:y + h, x:x + w]
-            if roi.size == 0:
-                scores.append(0.0)
-                continue
-            fill = float((roi > 0).mean())
-            scores.append(fill)
-            cv2.rectangle(debug, (x, y), (x + w, y + h), (0, 0, 0), 1)
+        def bubble_roi(r, c):
+            cy0 = int(grid_y + r * cell_h)
+            cx0 = int(grid_x + c * cell_w)
+            bh  = int(cell_h * CFG["BUBBLE_H"])
+            bw  = int(cell_w * CFG["BUBBLE_W"])
+            y   = int(cy0 + (cell_h - bh) / 2)
+            x   = int(cx0 + (cell_w - bw) / 2)
+            return y, x, bh, bw
 
-        idx  = int(np.argmax(scores))  # coluna mais “preta”
-        top1 = float(scores[idx])
-        top2 = float(sorted(scores, reverse=True)[1]) if len(scores) > 1 else 0.0
-        line_conf = max(0.0, top1 - top2)
-        confs.append(line_conf)
-        digits.append(str(idx))
+        # 4) varre linhas/colunas e escolhe a mais “preta”
+        digits, confs = [], []
+        debug = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        y, x, h, w = bubble_roi(r, idx)
-        cv2.rectangle(debug, (x, y), (x + w, y + h), (0, 0, 0), 2)
+        for r in range(CFG["ROWS"]):
+            scores = []
+            for c in range(CFG["COLS"]):
+                y, x, h, w = bubble_roi(r, c)
+                roi = bin_img[y:y+h, x:x+w]
+                if roi.size == 0:
+                    scores.append(0.0)
+                    continue
+                fill = float((roi > 0).mean())
+                scores.append(fill)
+                cv2.rectangle(debug, (x, y), (x+w, y+h), (0, 0, 0), 1)
 
-    confidence = float(np.mean(confs)) if confs else 0.0
-    inscricao  = "".join(digits)
+            idx  = int(np.argmax(scores))
+            top1 = float(scores[idx])
+            top2 = float(sorted(scores, reverse=True)[1]) if len(scores) > 1 else 0.0
+            line_conf = max(0.0, top1 - top2)
+            confs.append(line_conf)
+            digits.append(str(idx))
 
-    # 5) imagem de debug (útil para calibrar CFG)
-    _, dbg_png = cv2.imencode(".png", debug)
-    debug_b64  = base64.b64encode(dbg_png).decode("ascii")
-    debug_url  = f"data:image/png;base64,{debug_b64}"
+            y, x, h, w = bubble_roi(r, idx)
+            cv2.rectangle(debug, (x, y), (x+w, y+h), (0, 0, 0), 2)
 
-    return jsonify({
-        "inscricao": inscricao,
-        "confidence": round(confidence, 3),
-        "warped": bool(warped),
-        "debug_url": debug_url
-    })
+        confidence = float(np.mean(confs)) if confs else 0.0
+        inscricao  = "".join(digits)
+
+        # 5) imagem de debug
+        ok, dbg_png = cv2.imencode(".png", debug)
+        debug_b64  = base64.b64encode(dbg_png).decode("ascii") if ok else None
+        debug_url  = f"data:image/png;base64,{debug_b64}" if debug_b64 else None
+
+        return jsonify({
+            "inscricao": inscricao,
+            "confidence": round(confidence, 3),
+            "warped": bool(warped),
+            "H": H, "W": W,
+            "cfg_used": CFG,
+            "debug_url": debug_url
+        })
+
+    except Exception as e:
+        # log simples no stderr (aparece nos logs do Render)
+        import traceback, sys
+        traceback.print_exc(file=sys.stderr)
+        return jsonify({"error": str(e)}), 500
+
 
 @app.post("/warp_image")
 def warp_image():
@@ -232,5 +248,6 @@ def warp_image():
         "H": H, "W": W,
         "image_base64": f"data:image/jpeg;base64,{b64}" if b64 else None
     })
+
 
 
