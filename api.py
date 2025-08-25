@@ -125,15 +125,19 @@ def omr():
 
     # 2) configuração do grid (7 linhas x 10 colunas)
     CFG = {
-      "Y0": 0.8347,
-      "ALT": 0.1043,
-      "X0": 0.6989,
-      "LARG": 0.2068,
-      "ROWS": 7, "COLS": 10,
+      "Y0": 0.8744,
+      "ALT": 0.1173,
+      "X0": 0.7359,
+      "LARG": 0.2305,
+      "ROWS": 7,
+      "COLS": 10,
       "BUBBLE_H": 0.75,
-      "BUBBLE_W": 0.82,
+      "BUBBLE_W": 0.8,
       "MARGIN_DELTA": 0.06
     }
+    # Se vier cfg no body, ele sobrescreve o padrão (sem redeploy)
+    user_cfg = data.get("cfg") or {}
+    CFG = {**DEFAULT_CFG, **user_cfg}
 
     # 3) dimensões reais do grid
     grid_y = int(CFG["Y0"] * H)
@@ -228,4 +232,5 @@ def warp_image():
         "H": H, "W": W,
         "image_base64": f"data:image/jpeg;base64,{b64}" if b64 else None
     })
+
 
