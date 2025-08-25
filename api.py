@@ -5,7 +5,11 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app, resources={r"/omr": {"origins": "*"}, r"/health": {"origins": "*"}})
+CORS(app, resources={
+    r"/omr": {"origins": "*"},
+    r"/health": {"origins": "*"},
+    r"/warp_image": {"origins": "*"},   # <- adicione isto
+})
 
 # ---------- utils básicos ----------
 def decode_base64_to_gray(b64: str) -> np.ndarray:
@@ -188,3 +192,40 @@ def omr():
         "warped": bool(warped),
         "debug_url": debug_url
     })
+
+@app.post("/warp_image")
+def warp_image():
+    """Recebe image_base64 e (opcional) no_warp.
+       Retorna a imagem usada para OMR: warpeada (quando possível) ou normalizada."""
+    import base64, numpy as np, cv2  # já estão importados no topo; repita se quiser
+
+    data = request.get_json(force=True) or {}
+    img_b64 = data.get("image_base64")
+    no_warp = bool(data.get("no_warp", False))
+    if not img_b64:
+        return jsonify({"error": "image_base64 ausente"}), 400
+
+    # 1) decodifica
+    gray = decode_base64_to_gray(img_b64)
+
+    # 2) decide base
+    if no_warp:
+        warped = False
+        base = normalize(gray, width=1000)
+    else:
+        base, warped = warp_to_template(gray)
+        if not warped:
+            base = normalize(gray, width=1000)
+
+    H, W = base.shape[:2]
+
+    # 3) retorna JPEG base64 sem desenhos
+    ok, buf = cv2.imencode(".jpg", base)
+    b64 = base64.b64encode(buf).decode("ascii") if ok else None
+
+    return jsonify({
+        "warped": bool(warped),
+        "H": H, "W": W,
+        "image_base64": f"data:image/jpeg;base64,{b64}" if b64 else None
+    })
+
