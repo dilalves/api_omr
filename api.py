@@ -16,6 +16,13 @@ def decode_base64_to_gray(b64: str) -> np.ndarray:
         raise ValueError("Imagem inválida.")
     return img
 
+# 🚀 Normaliza a largura da imagem para padronizar
+def normalize(img, width=1000):
+    H, W = img.shape[:2]
+    scale = width / W
+    new_h = int(H * scale)
+    return cv2.resize(img, (width, new_h))
+
 def binarize(gray: np.ndarray) -> np.ndarray:
     g = cv2.GaussianBlur(gray, (5, 5), 0)
     thr = cv2.adaptiveThreshold(
@@ -64,7 +71,7 @@ def find_corners(gray):
         for i, (cent, pts) in enumerate(boxes):
             if i in used:
                 continue
-            d = (cent[0] - corner[0]) ** 2 + (cent[1] - corner[1]) ** 2
+            d = (cent[0] - corner[0])**2 + (cent[1] - corner[1])**2
             if d < best_d:
                 best_d, best_i = d, i
         if best_i >= 0:
@@ -103,9 +110,12 @@ def omr():
     if not img_b64:
         return jsonify({"error": "image_base64 ausente"}), 400
 
-    # 1) decodifica -> alinha (warp) -> binariza
+    # 1) decodifica -> tenta warp -> (se falhar) normaliza -> binariza
     gray = decode_base64_to_gray(img_b64)
     gray, warped = warp_to_template(gray)      # se não achar marcadores, segue sem warp
+    if not warped:
+        gray = normalize(gray, width=1000)     # <-- INDENTADO AQUI
+
     H, W = gray.shape[:2]
     bin_img = binarize(gray)
 
@@ -178,4 +188,3 @@ def omr():
         "warped": bool(warped),
         "debug_url": debug_url
     })
-
