@@ -187,7 +187,7 @@ def omr():
             if top1 < CFG["MIN_FILL"]:
                 digit = "#"   # nenhuma bolha preenchida
             elif (top1 - top2) < CFG["MARGIN_DELTA"]:
-                digit = "?"   # mais de uma bolha (ou ambíguo)
+                digit = "@"   # mais de uma bolha (ou ambíguo)
             else:
                 digit = str(idx)  # escolha normal
             
@@ -256,6 +256,7 @@ def warp_image():
         "H": H, "W": W,
         "image_base64": f"data:image/jpeg;base64,{b64}" if b64 else None
     })
+
 
 
 
