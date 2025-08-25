@@ -141,7 +141,8 @@ def omr():
             "ROWS": 7, "COLS": 10,
             "BUBBLE_H": 0.75,
             "BUBBLE_W": 0.80,
-            "MARGIN_DELTA": 0.06,
+            "MARGIN_DELTA": 0.06,  # diferença mínima entre top1 e top2
+            "MIN_FILL": 0.12       # preenchimento mínimo pra considerar "marcado"
         }
         user_cfg = data.get("cfg") or {}
         CFG = {**DEFAULT_CFG, **user_cfg}
@@ -178,13 +179,20 @@ def omr():
                 fill = float((roi > 0).mean())
                 scores.append(fill)
                 cv2.rectangle(debug, (x, y), (x+w, y+h), (0, 0, 0), 1)
-
+            
             idx  = int(np.argmax(scores))
             top1 = float(scores[idx])
             top2 = float(sorted(scores, reverse=True)[1]) if len(scores) > 1 else 0.0
-            line_conf = max(0.0, top1 - top2)
-            confs.append(line_conf)
-            digits.append(str(idx))
+            
+            if top1 < CFG["MIN_FILL"]:
+                digit = "#"   # nenhuma bolha preenchida
+            elif (top1 - top2) < CFG["MARGIN_DELTA"]:
+                digit = "?"   # mais de uma bolha (ou ambíguo)
+            else:
+                digit = str(idx)  # escolha normal
+            
+            digits.append(digit)
+            confs.append(max(0.0, top1 - top2))
 
             y, x, h, w = bubble_roi(r, idx)
             cv2.rectangle(debug, (x, y), (x+w, y+h), (0, 0, 0), 2)
@@ -248,6 +256,7 @@ def warp_image():
         "H": H, "W": W,
         "image_base64": f"data:image/jpeg;base64,{b64}" if b64 else None
     })
+
 
 
 
