@@ -258,6 +258,135 @@ def warp_image():
     })
 
 
+# --- ADIÇÕES --- a partir desse ponto, a api pode ser chamar pelo PHP que enviará para a tabela no hostinger
 
+import requests  # novo
 
+# permitir CORS no novo endpoint também (coloque onde você definiu o CORS)
+# CORS(app, resources={ r"/omr": {"origins": "*"},
+#                       r"/health": {"origins": "*"},
+#                       r"/warp_image": {"origins": "*"},
+#                       r"/omr_job": {"origins": "*"},   # <- ADICIONE ESTA LINHA
+#                     })
 
+def process_gray_image(gray, no_warp=False):
+    # reusa suas funções normalize / warp_to_template / binarize e a lógica do /omr
+    if no_warp:
+        warped = False
+        base = normalize(gray, width=1000)
+    else:
+        base, warped = warp_to_template(gray)
+        if not warped:
+            base = normalize(gray, width=1000)
+
+    H, W = base.shape[:2]
+    bin_img = binarize(base)
+
+    DEFAULT_CFG = {
+        "Y0": 0.8744, "ALT": 0.1173, "X0": 0.7359, "LARG": 0.2305,
+        "ROWS": 7, "COLS": 10, "BUBBLE_H": 0.75, "BUBBLE_W": 0.80,
+        "MARGIN_DELTA": 0.06, "MIN_FILL": 0.12
+    }
+
+    # (mesma varredura que você tem no /omr)
+    digits, confs = [], []
+    debug = cv2.cvtColor(base, cv2.COLOR_GRAY2BGR)
+
+    grid_y = int(DEFAULT_CFG["Y0"] * H)
+    grid_h = int(DEFAULT_CFG["ALT"] * H)
+    grid_x = int(DEFAULT_CFG["X0"] * W)
+    grid_w = int(DEFAULT_CFG["LARG"] * W)
+    cell_h = grid_h / DEFAULT_CFG["ROWS"]
+    cell_w = grid_w / DEFAULT_CFG["COLS"]
+
+    def bubble_roi(r, c):
+        cy0 = int(grid_y + r * cell_h)
+        cx0 = int(grid_x + c * cell_w)
+        bh  = int(cell_h * DEFAULT_CFG["BUBBLE_H"])
+        bw  = int(cell_w * DEFAULT_CFG["BUBBLE_W"])
+        y   = int(cy0 + (cell_h - bh) / 2)
+        x   = int(cx0 + (cell_w - bw) / 2)
+        return y, x, bh, bw
+
+    for r in range(DEFAULT_CFG["ROWS"]):
+        scores = []
+        for c in range(DEFAULT_CFG["COLS"]):
+            y, x, h, w = bubble_roi(r, c)
+            roi = bin_img[y:y+h, x:x+w]
+            fill = float((roi > 0).mean()) if roi.size else 0.0
+            scores.append(fill)
+            cv2.rectangle(debug, (x, y), (x+w, y+h), (0,0,0), 1)
+        idx  = int(np.argmax(scores))
+        top1 = float(scores[idx])
+        top2 = float(sorted(scores, reverse=True)[1]) if len(scores) > 1 else 0.0
+        if top1 < DEFAULT_CFG["MIN_FILL"]:
+            digit = "#"
+        elif (top1 - top2) < DEFAULT_CFG["MARGIN_DELTA"]:
+            digit = "@"
+        else:
+            digit = str(idx)
+        digits.append(digit)
+        confs.append(max(0.0, top1 - top2))
+        y, x, h, w = bubble_roi(r, idx)
+        cv2.rectangle(debug, (x, y), (x+w, y+h), (0,0,0), 2)
+
+    confidence = float(np.mean(confs)) if confs else 0.0
+    inscricao  = "".join(digits)
+
+    ok, dbg_png = cv2.imencode(".png", debug)
+    debug_b64  = base64.b64encode(dbg_png).decode("ascii") if ok else None
+    debug_url  = f"data:image/png;base64,{debug_b64}" if debug_b64 else None
+
+    return {
+        "inscricao": inscricao,
+        "confidence": round(confidence, 3),
+        "warped": bool(warped),
+        "H": H, "W": W,
+        "debug_url": debug_url
+    }
+
+@app.post("/omr_job")
+def omr_job():
+    """
+    JSON: { "file_id": "...", "link_down": "...", "callback_url": "https://.../omr-callback.php", "no_warp": false }
+    Baixa a imagem, roda OMR e envia POST de volta ao PHP (callback).
+    """
+    try:
+        j = request.get_json(force=True) or {}
+        file_id = j.get("file_id")
+        link_down = j.get("link_down")
+        callback_url = j.get("callback_url")
+        no_warp = bool(j.get("no_warp", False))
+
+        if not (file_id and link_down and callback_url):
+            return jsonify({"error": "file_id, link_down e callback_url são obrigatórios"}), 400
+
+        r = requests.get(link_down, timeout=30)
+        r.raise_for_status()
+        arr = np.frombuffer(r.content, dtype=np.uint8)
+        gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            raise ValueError("Não consegui decodificar a imagem baixada")
+
+        result = process_gray_image(gray, no_warp=no_warp)
+
+        payload = {
+            "fileId": file_id,
+            "inscricao": result["inscricao"],
+            "confidence": result["confidence"],
+            "warped": result["warped"],
+            "debug_url": result["debug_url"],
+            "W": result["W"], "H": result["H"]
+        }
+        # fire-and-forget do callback
+        try:
+            requests.post(callback_url, json=payload, timeout=10)
+        except Exception:
+            pass
+
+        return jsonify({"ok": True, "dispatched": True, "fileId": file_id})
+
+    except Exception as e:
+        import traceback, sys
+        traceback.print_exc(file=sys.stderr)
+        return jsonify({"error": str(e)}), 500
