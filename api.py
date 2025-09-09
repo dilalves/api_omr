@@ -345,6 +345,8 @@ def process_gray_image(gray, no_warp=False):
         "debug_url": debug_url
     }
 
+import sys, json
+
 @app.post("/omr_job")
 def omr_job():
     """
@@ -353,6 +355,8 @@ def omr_job():
     """
     try:
         j = request.get_json(force=True) or {}
+        print("[omr_job] payload recebido:", json.dumps(j)[:500], file=sys.stderr, flush=True)  # LOG
+
         file_id = j.get("file_id")
         link_down = j.get("link_down")
         callback_url = j.get("callback_url")
@@ -362,7 +366,9 @@ def omr_job():
             return jsonify({"error": "file_id, link_down e callback_url são obrigatórios"}), 400
 
         r = requests.get(link_down, timeout=30)
+        print("[omr_job] GET link_down status:", r.status_code, file=sys.stderr, flush=True)  # LOG
         r.raise_for_status()
+
         arr = np.frombuffer(r.content, dtype=np.uint8)
         gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
         if gray is None:
@@ -378,15 +384,16 @@ def omr_job():
             "debug_url": result["debug_url"],
             "W": result["W"], "H": result["H"]
         }
-        # fire-and-forget do callback
+
         try:
-            requests.post(callback_url, json=payload, timeout=10)
-        except Exception:
-            pass
+            cb = requests.post(callback_url, json=payload, timeout=10)
+            print("[omr_job] callback status:", cb.status_code, file=sys.stderr, flush=True)  # LOG
+        except Exception as cb_e:
+            print("[omr_job] callback error:", cb_e, file=sys.stderr, flush=True)
 
         return jsonify({"ok": True, "dispatched": True, "fileId": file_id})
 
     except Exception as e:
-        import traceback, sys
+        import traceback
         traceback.print_exc(file=sys.stderr)
         return jsonify({"error": str(e)}), 500
