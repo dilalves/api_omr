@@ -9,6 +9,7 @@ CORS(app, resources={
     r"/omr": {"origins": "*"},
     r"/health": {"origins": "*"},
     r"/warp_image": {"origins": "*"},   # <- adicione isto
+    r"/omr_job": {"origins": "*"}  # adicione esta linha para liberar CORS no endpoint /omr_job
 })
 
 # ---------- utils básicos ----------
@@ -397,3 +398,4 @@ def omr_job():
         import traceback
         traceback.print_exc(file=sys.stderr)
         return jsonify({"error": str(e)}), 500
+
